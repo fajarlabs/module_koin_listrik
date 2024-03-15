@@ -3,6 +3,8 @@
 #include <PZEM004Tv30.h>
 #include "EEvar.h"
 #include <TimeOut.h>
+#include <avr/wdt.h>
+#include <MemoryFree.h>
 
 #define EEADDR 166            // Jangan di ubah
 #define RELAY_PIN 6           // Main Pin Relay
@@ -100,6 +102,9 @@ bool isReady = false;
 int stage_overload = 0;
 
 void setup() {
+  wdt_disable(); // disable wdt 
+  delay(2000);   // tunggu hingga stabil
+  wdt_enable(WDTO_8S); // aktifkan watchdog timer pada rentang 8 detik
   Serial.begin(9600);
   initMyLCD();
   _pMode(INTERRUPT_COIN_PIN, INPUT_PULLUP);
@@ -132,6 +137,7 @@ void setup() {
   timeout1.timeOut(RESTART_TIME, callback1);  // delay, callback function
 }
 void loop() {
+  wdt_reset(); // fungsi ini dijalankan artinya program baik-baik saja
   TimeOut::handler();
 
   if (_dRead(RESET_PIN) == LOW) {
@@ -161,6 +167,9 @@ void loop() {
   }
 
   if (wait(1000)) {
+
+    Serial.print(F("freeMemory()="));
+    Serial.println(freeMemory());
 
     if (isReady == false) {
       writeLCD(LCD_TYPE_COLS, 0, 0, "");
@@ -242,7 +251,7 @@ void _calculate() {
 
           // periksa jika sisa kredit daya kosong/null/error
           if (sisaKreditDayaDetikTemp < 1 || isnan(sisaKreditDayaDetikTemp)) {
-            Serial.println("Credit is empty");
+            Serial.println(F("Credit is empty"));
           } else {
             estimasi_habis = hitungEstimasiHabis(sisaKreditDayaDetikTemp, beban_daya);
           }
@@ -328,15 +337,15 @@ void incomingImpuls() {
 void callback0() {
   int coinUang = 0;
   if (impulsCount == 1) {
-    Serial.println("*DBG*Coin 1");
+    Serial.println(F("*DBG*Coin 1"));
   }
   if (impulsCount == 5) {
     coinUang = 1000;
-    Serial.println("*DBG*Coin 2");
+    Serial.println(F("*DBG*Coin 2"));
   }
   if (impulsCount == 10) {
     coinUang = 500;
-    Serial.println("*DBG*Coin 3");
+    Serial.println(F("*DBG*Coin 3"));
   }
   Serial.println(F("*MSG*Add Coin"));
   StoreData sd = konversi_uang_ke_sisa_daya(coinUang, PERKWH);
@@ -384,21 +393,21 @@ float hitungEstimasiHabis(float sisa_kredit_daya_dalam_detik, float beban_daya) 
 }
 
 void showVars(StoreData *p) {
-  Serial.print("Uang dari koin acceptor : Rp.");
-  Serial.println(p->uang);
-  Serial.print("Harga per-Kwh : Rp.");
-  Serial.println(p->harga_perkwh);
-  Serial.print("Harga 1 watt per-Rupiah : Rp.");
-  Serial.println(p->harga_1_watt);
-  Serial.print("Mendapatkan Watt : ");
-  Serial.print(p->dapatkan_kredit_watt);
-  Serial.println(" watt/seconds");
-  Serial.print("Total kredit daya dalam detik selama 1 jam : ");
-  Serial.print(p->sisa_kredit_daya_dalam_detik);
-  Serial.println(" watt/seconds");
-  Serial.print("Sisa dalam watt : ");
-  Serial.print(sisaDayaKeWatt(p->sisa_kredit_daya_dalam_detik));
-  Serial.println(" watt");
+  // Serial.print("Uang dari koin acceptor : Rp.");
+  // Serial.println(p->uang);
+  // Serial.print("Harga per-Kwh : Rp.");
+  // Serial.println(p->harga_perkwh);
+  // Serial.print("Harga 1 watt per-Rupiah : Rp.");
+  // Serial.println(p->harga_1_watt);
+  // Serial.print("Mendapatkan Watt : ");
+  // Serial.print(p->dapatkan_kredit_watt);
+  // Serial.println(" watt/seconds");
+  // Serial.print("Total kredit daya dalam detik selama 1 jam : ");
+  // Serial.print(p->sisa_kredit_daya_dalam_detik);
+  // Serial.println(" watt/seconds");
+  // Serial.print("Sisa dalam watt : ");
+  // Serial.print(sisaDayaKeWatt(p->sisa_kredit_daya_dalam_detik));
+  // Serial.println(" watt");
 }
 
 bool wait(unsigned long duration) {
