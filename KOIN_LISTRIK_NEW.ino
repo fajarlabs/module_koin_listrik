@@ -6,6 +6,8 @@
 #include <avr/wdt.h>
 #include <MemoryFree.h>
 
+#define TITLE "Easy EV-Charger"
+#define FW_VERSION "v.1.7"
 #define EEADDR 166            // Jangan di ubah
 #define RELAY_PIN 6           // Main Pin Relay
 #define RELAY_PIN_SUPPORT 7   // Support Pin Relay
@@ -16,9 +18,9 @@
 #define LCD_TYPE_COLS 16      // jenis LCD 16x2
 #define LCD_TYPE_ROWS 2       // jenis LCD 16x2
 
-#define PERKWH 25000            // Setting KWH 1820
-#define NORMAL_CURRENT 8        // batas normal arus yang bisa dilewati jangan lebih besar daripada limit current
-#define LIMIT_CURRENT 10        // otomatis cutoff jika lebih atau sama dengan 16 Ampere
+#define PERKWH 27000            // Setting KWH 1820
+#define NORMAL_CURRENT 3        // batas normal arus yang bisa dilewati jangan lebih besar daripada limit current
+#define LIMIT_CURRENT 4         // otomatis cutoff jika lebih atau sama dengan 16 Ampere
 #define LIMIT_MINIMUM_KWH 0.01  // batas toleransi bawah agar cutoff
 //#define RESTART_TIME 36000000  // every 10 hours
 
@@ -48,28 +50,28 @@ typedef struct
 
 void incomingImpuls();
 void callback0();
-//void callback1();
-StoreData konversi_uang_ke_sisa_daya(long uang, float harga_per_kwh);
+StoreData konversiUangKeSisaDaya(long uang, float harga_per_kwh);
 float sisaDayaKeWatt(float sisa_daya);
-float hitungBebanDaya(float voltage, float current);
 float hitungEstimasiHabis(float sisa_kredit_daya_dalam_detik, float beban_daya);
 void showVars(StoreData *p);
 bool wait(unsigned long duration);
+bool waitBuzz(unsigned long duration);
+bool waitHold(unsigned long duration);
 void tulisLCD(int col, int row, String text);
 void bersihkanLCD(int row, int total_cols);
 void simpanRekaman(HistoryData hd, int eeaddr);
 HistoryData dapatkanRekaman(int eeaddr);
 void showPowerVars(float voltage, float current, float power, float energy, float frequency, float pf);
-void initMyLCD();
-void writeLCD(int max_char, int cols, int rows, String message);
-void buzzerFlipFlop(bool set_on, bool set_backlight);
+void initLCD();
+void wLCD(int max_char, int cols, int rows, String message);
+void blinkBuzz(bool set_on, bool set_backlight);
 //void (*resetFunc)(void) = 0;
 void _de(long t_stamp);
 void _dWrite(uint8_t pin, uint8_t state);
 void _pMode(uint8_t pin, uint8_t mode);
 int _dRead(uint8_t pin);
-void _calculate();
-void noCredit(float voltage, float current, float power);
+void calculate();
+void showDisplay(float voltage, float current, float power, String label_kwh = "");
 
 EEstore<float> eeSisaKreditDayaDetik(0.0);
 SoftwareSerial pzemSWSerial(PZEM_RX_PIN, PZEM_TX_PIN);
@@ -79,9 +81,6 @@ HistoryData hd;
 // timeout 0 (check coin)
 TimeOut timeout0;
 int impulsCount = 0;
-
-// timeout 1 ( auto restart )
-//TimeOut timeout1;
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
@@ -109,11 +108,11 @@ void setup() {
   delay(2000);          // tunggu hingga stabil
   wdt_enable(WDTO_8S);  // aktifkan watchdog timer pada rentang 8 detik
   Serial.begin(9600);
-  initMyLCD();
+  initLCD();
   _pMode(INTERRUPT_COIN_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(2), incomingImpuls, RISING);
-  writeLCD(LCD_TYPE_COLS, 0, 0, "EV-Charger Koin");
-  writeLCD(LCD_TYPE_COLS, 0, 1, "   ----##----  ");
+  wLCD(LCD_TYPE_COLS, 0, 0, TITLE);
+  wLCD(LCD_TYPE_COLS, 0, 1, FW_VERSION);
   _de(1000);
 
   // relay pin relay
@@ -130,78 +129,79 @@ void setup() {
   _dWrite(RELAY_PIN_SUPPORT, LOW);
   _de(500);
 
-  // for (int i = 0; i < LCD_TYPE_ROWS; i++) {
-  //   writeLCD(LCD_TYPE_COLS, 0, i, "");
-  // }
-
   isStarted = true;
-
-  // restart setiap 24 jam sekali
-  //timeout1.timeOut(RESTART_TIME, callback1);  // delay, callback function
 }
 void loop() {
-  wdt_reset();  // fungsi ini dijalankan artinya program baik-baik saja
+  wdt_reset();  // fungsi ini di eksekusi artinya program baik-baik saja
   TimeOut::handler();
 
-  if (_dRead(RESET_PIN) == LOW) {
-    if (wait(200)) {
-      holdReset -= 1;
-      if (holdReset < 1) {
-        float resetSisaKredit = 0;
-        eeSisaKreditDayaDetik << resetSisaKredit;
-        Serial.println(F("*MSG*RESET BERHASIL"));
-        holdReset = MAX_COUNTER;
+  if (stage_overload < 2) {
+    if (_dRead(RESET_PIN) == LOW) {
+      if (waitHold(200)) {
+        holdReset -= 1;
+        if (holdReset < 1) {
+          float resetSisaKredit = 0;
+          eeSisaKreditDayaDetik << resetSisaKredit;
+          Serial.println(F("*MSG*RESET BERHASIL"));
+          holdReset = MAX_COUNTER;
 
-        for (int i = 0; i < 3; i++) {
-          writeLCD(LCD_TYPE_COLS, 0, 0, "");
-          writeLCD(LCD_TYPE_COLS, 0, 1, "");
-          _dWrite(BUZZER_PIN, LOW);
-          _de(200);
-          writeLCD(LCD_TYPE_COLS, 0, 0, " RESET BERHASIL ");
-          _dWrite(BUZZER_PIN, HIGH);
-          _de(200);
-          writeLCD(LCD_TYPE_COLS, 0, 0, "");
-          writeLCD(LCD_TYPE_COLS, 0, 1, "");
-          _dWrite(BUZZER_PIN, LOW);
+          for (int i = 0; i < 3; i++) {
+            wLCD(LCD_TYPE_COLS, 0, 0, "");
+            wLCD(LCD_TYPE_COLS, 0, 1, "");
+            _dWrite(BUZZER_PIN, LOW);
+            _de(200);
+            wLCD(LCD_TYPE_COLS, 0, 0, " RESET BERHASIL ");
+            _dWrite(BUZZER_PIN, HIGH);
+            _de(200);
+            wLCD(LCD_TYPE_COLS, 0, 0, "");
+            wLCD(LCD_TYPE_COLS, 0, 1, "");
+            _dWrite(BUZZER_PIN, LOW);
+          }
         }
       }
+    } else {
+      holdReset = MAX_COUNTER;
     }
-  } else {
-    holdReset = MAX_COUNTER;
+
+    if (wait(1000)) {
+
+      Serial.print(F("freeMemory()="));
+      Serial.println(freeMemory());
+
+      if (isReady == false) {
+        wLCD(LCD_TYPE_COLS, 0, 0, "");
+        wLCD(LCD_TYPE_COLS, 0, 1, "");
+        wLCD(LCD_TYPE_COLS, 0, 0, "Memuat data...");
+        _de(500);
+      }
+
+      // Check if the data is valid
+      if (isnan(voltage)) {
+        Serial.println(F("*ERR*Error reading voltage"));
+      } else if (isnan(current)) {
+        Serial.println(F("*ERR*Error reading current"));
+      } else if (isnan(power)) {
+        Serial.println(F("*ERR*Error reading power"));
+      } else if (isnan(energy)) {
+        Serial.println(F("*ERR*Error reading energy"));
+      } else if (isnan(frequency)) {
+        Serial.println(F("*ERR*Error reading frequency"));
+      } else if (isnan(pf)) {
+        Serial.println(F("*ERR*Error reading power factor"));
+      } else {
+        calculate();
+      }
+    }
   }
 
-  if (wait(1000)) {
-
-    Serial.print(F("freeMemory()="));
-    Serial.println(freeMemory());
-
-    if (isReady == false) {
-      writeLCD(LCD_TYPE_COLS, 0, 0, "");
-      writeLCD(LCD_TYPE_COLS, 0, 1, "");
-      writeLCD(LCD_TYPE_COLS, 0, 0, "Memuat data...");
-      _de(500);
-    }
-
-    // Check if the data is valid
-    if (isnan(voltage)) {
-      Serial.println(F("*ERR*Error reading voltage"));
-    } else if (isnan(current)) {
-      Serial.println(F("*ERR*Error reading current"));
-    } else if (isnan(power)) {
-      Serial.println(F("*ERR*Error reading power"));
-    } else if (isnan(energy)) {
-      Serial.println(F("*ERR*Error reading energy"));
-    } else if (isnan(frequency)) {
-      Serial.println(F("*ERR*Error reading frequency"));
-    } else if (isnan(pf)) {
-      Serial.println(F("*ERR*Error reading power factor"));
-    } else {
-      _calculate();
+  if (waitBuzz(300)) {
+    if (stage_overload >= 2) {
+      blinkBuzz(true, true);
     }
   }
 }
 
-void _calculate() {
+void calculate() {
   if (stage_overload < 2) {
     voltage = pzem.voltage();
     current = pzem.current();
@@ -210,28 +210,12 @@ void _calculate() {
     frequency = pzem.frequency();
     pf = pzem.pf();
 
-    if (current < NORMAL_CURRENT) {
-      stage_overload = 0;
-      buzzerFlipFlop(false, false);
-    } else if (current >= NORMAL_CURRENT && current < LIMIT_CURRENT) {
-      stage_overload = 1;
-    } else if (current >= LIMIT_CURRENT) {
-      stage_overload = 2;
-      writeLCD(LCD_TYPE_COLS, 0, 0, "");
-      writeLCD(LCD_TYPE_COLS, 0, 1, "");
-      _de(500);
-      writeLCD(LCD_TYPE_COLS, 0, 0, " OVERLOAD!! ");
-      _dWrite(RELAY_PIN, LOW);
-      _dWrite(RELAY_PIN_SUPPORT, LOW);
-      Serial.println(F("*MSG*Switch status : OFF"));
-    }
-
     if (stage_overload < 2) {
 
       if (isReady == false) {
         isReady = true;
-        writeLCD(LCD_TYPE_COLS, 0, 0, "");
-        writeLCD(LCD_TYPE_COLS, 0, 1, "");
+        wLCD(LCD_TYPE_COLS, 0, 0, "");
+        wLCD(LCD_TYPE_COLS, 0, 1, "");
       }
 
       if (voltage > 0) {
@@ -243,15 +227,9 @@ void _calculate() {
         if (sisaKreditDayaDetikTemp >= 1) {
           float estimasi_habis = 0;
           float beban_daya = 0;
-          float powerA = hitungBebanDaya(voltage, current);
-          float powerB = power;
           // ambil daya yang paling sesuai
           // daya dari perhitungan P = V*I atau P = SENSOR jika tidak watt terlalu kecil
-          if (powerA > powerB) {
-            beban_daya = powerA;
-          } else {
-            beban_daya = powerB;
-          }
+          beban_daya = power;
 
           // periksa jika sisa kredit daya kosong/null/error
           if (sisaKreditDayaDetikTemp < 1 || isnan(sisaKreditDayaDetikTemp)) {
@@ -289,17 +267,13 @@ void _calculate() {
           if (convertToKWH > LIMIT_MINIMUM_KWH) {
             if (is_shutdown) is_shutdown = false;
 
-            writeLCD(4, 0, 0, String(int(voltage)) + String("V"));
-            writeLCD(5, 5, 0, String(current) + String("A"));
-            writeLCD(5, 11, 0, String(int(power)) + String("W"));
-            writeLCD(6, 0, 1, "PULSA:");
-
-
+            String overloadLabel;
             if (stage_overload == 1 && convertToKWH) {
-              writeLCD(11, 6, 1, String(convertToKWH) + String("KWH") + "80%");  // karater sudah penuh jadi % ini hilang
+              overloadLabel = String(convertToKWH) + String("KWH") + "80%";  // karater sudah penuh jadi % ini hilang
             } else {
-              writeLCD(11, 6, 1, String(convertToKWH) + String("KWH"));
+              overloadLabel = String(convertToKWH) + String("KWH");
             }
+            showDisplay(voltage, current, power, overloadLabel);
 
             _dWrite(RELAY_PIN, HIGH);
             _dWrite(RELAY_PIN_SUPPORT, HIGH);
@@ -314,41 +288,77 @@ void _calculate() {
             simpanRekaman(hd, EEADDR);
             eeSisaKreditDayaDetik << sisaKreditDayaDetikTemp;
           } else {
-            noCredit(voltage, current, power);
             _dWrite(RELAY_PIN, LOW);
             _dWrite(RELAY_PIN_SUPPORT, LOW);
             Serial.println(F("*MSG*Switch status : OFF"));
             if (!is_shutdown) {
               _dWrite(BUZZER_PIN, HIGH);
+              wLCD(LCD_TYPE_COLS, 0, 0, "");
+              wLCD(LCD_TYPE_COLS, 0, 1, "");
+              wLCD(LCD_TYPE_COLS, 0, 0, "Pulsa anda habis");
+              wLCD(LCD_TYPE_COLS, 0, 1, "Terimakasih");
               delay(2000);
               _dWrite(BUZZER_PIN, LOW);
               is_shutdown = true;
             }
+            showDisplay(voltage, current, power);
 
             sisaKreditDayaDetikTemp = 0;
             eeSisaKreditDayaDetik << sisaKreditDayaDetikTemp;
           }
         } else {
-          noCredit(voltage, current, power);
+          showDisplay(voltage, current, power);
           _dWrite(RELAY_PIN, LOW);
           _dWrite(RELAY_PIN_SUPPORT, LOW);
         }
       } else {
-        writeLCD(LCD_TYPE_COLS, 0, 0, "No voltage");
+        wLCD(LCD_TYPE_COLS, 0, 0, "No voltage");
       }
     }
-  } else {
-    buzzerFlipFlop(true, true);
-    // lock system if overload
+  }
+
+  if (current < NORMAL_CURRENT) {
+    stage_overload = 0;
+    blinkBuzz(false, false);
+  } else if (current >= NORMAL_CURRENT && current < LIMIT_CURRENT) {
+    stage_overload = 1;
+  } else if (current >= LIMIT_CURRENT) {
+    if (stage_overload < 2) {
+      wLCD(LCD_TYPE_COLS, 0, 0, "");
+      wLCD(LCD_TYPE_COLS, 0, 1, "");
+    }
+    stage_overload = 2;
+    _de(500);
+    wLCD(LCD_TYPE_COLS, 0, 0, "Overload!!");
+    _dWrite(RELAY_PIN, LOW);
+    _dWrite(RELAY_PIN_SUPPORT, LOW);
+    Serial.println(F("*MSG*Switch status : OFF"));
   }
 }
 
-void noCredit(float voltage, float current, float power) {
-  writeLCD(4, 0, 0, String(int(voltage)) + String("V"));
-  writeLCD(5, 5, 0, String(current) + String("A"));
-  writeLCD(5, 11, 0, String(int(power)) + String("W"));
-  writeLCD(6, 0, 1, "PULSA:");
-  writeLCD(11, 6, 1, String("0KWH"));
+void showDisplay(float voltage, float current, float power, String label_kwh = "") {
+  static bool isLabelKWH = false;
+  if (label_kwh == "") {
+    if (isLabelKWH) {
+      wLCD(LCD_TYPE_COLS, 0, 0, "");
+      wLCD(LCD_TYPE_COLS, 0, 1, "");
+      isLabelKWH = false;
+    }
+    wLCD(LCD_TYPE_COLS, 0, 0, "Masukkan koin");
+    wLCD(LCD_TYPE_COLS, 0, 1, "500 atau 1000");
+    //wLCD(11, 6, 1, String("0KWH"));
+  } else {
+    if (!isLabelKWH) {
+      wLCD(LCD_TYPE_COLS, 0, 0, "");
+      wLCD(LCD_TYPE_COLS, 0, 1, "");
+      isLabelKWH = true;
+    }
+    wLCD(4, 0, 0, String(int(voltage)) + String("V"));
+    wLCD(5, 5, 0, String(current) + String("A"));
+    wLCD(5, 11, 0, String(int(power)) + String("W"));
+    wLCD(6, 0, 1, "PULSA:");
+    wLCD(11, 6, 1, label_kwh);
+  }
 }
 
 void incomingImpuls() {
@@ -371,7 +381,7 @@ void callback0() {
     Serial.println(F("*DBG*Coin 3"));
   }
   Serial.println(F("*MSG*Add Coin"));
-  StoreData sd = konversi_uang_ke_sisa_daya(coinUang, PERKWH);
+  StoreData sd = konversiUangKeSisaDaya(coinUang, PERKWH);
   float _sisaKreditDayaDetik = 0;
   eeSisaKreditDayaDetik >> _sisaKreditDayaDetik;
   float _NewWisaKreditDayaDetik = _sisaKreditDayaDetik + sd.sisa_kredit_daya_dalam_detik;
@@ -390,7 +400,7 @@ void callback0() {
 //   resetFunc();
 // }
 
-StoreData konversi_uang_ke_sisa_daya(long uang, float harga_per_kwh) {
+StoreData konversiUangKeSisaDaya(long uang, float harga_per_kwh) {
   StoreData obj;
   obj.harga_1_watt = harga_per_kwh / 1000;
   obj.dapatkan_kredit_watt = uang / obj.harga_1_watt;
@@ -402,10 +412,6 @@ StoreData konversi_uang_ke_sisa_daya(long uang, float harga_per_kwh) {
 
 float sisaDayaKeWatt(float sisa_daya) {
   return sisa_daya / 3600;
-}
-
-float hitungBebanDaya(float voltage, float current) {
-  return voltage * current;
 }
 
 float hitungEstimasiHabis(float sisa_kredit_daya_dalam_detik, float beban_daya) {
@@ -450,6 +456,40 @@ bool wait(unsigned long duration) {
   return false;
 }
 
+bool waitBuzz(unsigned long duration) {
+  static unsigned long buzzStartTime;
+  static bool isBuzzStarted = false;
+
+  if (isBuzzStarted == false) {
+    buzzStartTime = millis();
+    isBuzzStarted = true;
+    return false;
+  }
+
+  if (millis() - buzzStartTime >= duration) {
+    isBuzzStarted = false;
+    return true;
+  }
+  return false;
+}
+
+bool waitHold(unsigned long duration) {
+  static unsigned long holdStartTime;
+  static bool isHoldStarted = false;
+
+  if (isHoldStarted == false) {
+    holdStartTime = millis();
+    isHoldStarted = true;
+    return false;
+  }
+
+  if (millis() - holdStartTime >= duration) {
+    isHoldStarted = false;
+    return true;
+  }
+  return false;
+}
+
 void tulisLCD(int col, int row, String text) {
   lcd.setCursor(col, row);
   lcd.print(text);
@@ -484,13 +524,13 @@ void showPowerVars(float voltage, float current, float power, float energy, floa
     */
 }
 
-void initMyLCD() {
+void initLCD() {
   lcd.init();
   lcd.backlight();
   lcd.clear();
 }
 
-void writeLCD(int max_char, int cols, int rows, String message) {
+void wLCD(int max_char, int cols, int rows, String message) {
   lcd.setCursor(cols, rows);
   if (message.length() > max_char) {
     for (int i = 0; i < max_char; i++) {
@@ -510,7 +550,7 @@ void writeLCD(int max_char, int cols, int rows, String message) {
   }
 }
 
-void buzzerFlipFlop(bool set_on, bool set_backlight) {
+void blinkBuzz(bool set_on, bool set_backlight) {
   if (set_on == true) {
     if (isBuzzer == false) {
       _dWrite(BUZZER_PIN, HIGH);
