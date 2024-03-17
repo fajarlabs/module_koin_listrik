@@ -8,25 +8,46 @@
 
 #define TITLE "Easy EV-Charger"
 #define FW_VERSION "v.1.7"
+#define BOARD_SUPPORT 2       // 1 (versi lama), 2 (versi baru)
+
 #define EEADDR 166            // Jangan di ubah
-#define RELAY_PIN 6           // Main Pin Relay
+
+#if BOARD_SUPPORT == 1
+#define RELAY_PIN 5           // Main Pin Relay (versi lama)
+#define BUZZER_PIN 8          // Buzzer Analog (versi lama)
+#define RESET_PIN 3           // reset ZERO (versi lama)
+#endif
+
+#if BOARD_SUPPORT == 2
+#define RELAY_PIN 6           // Main Pin Relay (versi baru)
+#define BUZZER_PIN A3         // Buzzer Analog (versi baru)
+#define RESET_PIN 4           // reset ZERO (versi baru)
+#endif
+
 #define RELAY_PIN_SUPPORT 7   // Support Pin Relay
-#define RESET_PIN 4           // reset ZERO
-#define BUZZER_PIN A3         // Buzzer Analog
+
 #define INTERRUPT_COIN_PIN 2  // Pin ini dipakai untuk Coin PIN
 #define MAX_COUNTER 2         // Ini adalah setting ketika menahan tombol perlu 2 detik baru aktif
 #define LCD_TYPE_COLS 16      // jenis LCD 16x2
 #define LCD_TYPE_ROWS 2       // jenis LCD 16x2
 
-#define PERKWH 27000            // Setting KWH 1820
-#define NORMAL_CURRENT 3        // batas normal arus yang bisa dilewati jangan lebih besar daripada limit current
-#define LIMIT_CURRENT 4         // otomatis cutoff jika lebih atau sama dengan 16 Ampere
+#define PERKWH 1820            // Setting KWH 1820
+#define NORMAL_CURRENT 8        // batas normal arus yang bisa dilewati jangan lebih besar daripada limit current
+#define LIMIT_CURRENT 10         // otomatis cutoff jika lebih atau sama dengan 16 Ampere
 #define LIMIT_MINIMUM_KWH 0.01  // batas toleransi bawah agar cutoff
-//#define RESTART_TIME 36000000  // every 10 hours
 
 #if !defined(PZEM_RX_PIN) && !defined(PZEM_TX_PIN)
+
+#if BOARD_SUPPORT == 1
+#define PZEM_RX_PIN 10
+#define PZEM_TX_PIN 9
+#endif
+
+#if BOARD_SUPPORT == 2
 #define PZEM_RX_PIN 9
 #define PZEM_TX_PIN 10
+#endif
+
 #endif
 
 typedef struct
